@@ -1,0 +1,24 @@
+# Patient data must never go into the repository.
+data/real_data/*
+!data/real_data/README.md
+*.csv
+!data/synthetic_test/*.csv
+
+# Results from real data stay on the secure system too.
+outputs/*
+!outputs/.gitkeep
+
+# Cluster job logs
+*.out
+*.err
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Files from the operating system and the editor
+.DS_Store
+.vscode/

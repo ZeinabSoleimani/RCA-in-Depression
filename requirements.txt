@@ -1,0 +1,8 @@
+# These are the versions I used for the paper, with Python 3.10.
+# Keep causalml below 0.18. src/uplift.py reads the leaf effects from the
+# tree format of causalml 0.15 to 0.17, and version 0.18 changed that format.
+pandas==2.3.3
+numpy==1.26.4
+scikit-learn==1.7.2
+action-rules==2.1.2
+causalml==0.15.5

@@ -1,0 +1,46 @@
+#!/bin/bash
+#BSUB -J rca_paper
+#BSUB -P acc_YOUR_ACCOUNT
+#BSUB -q premium
+#BSUB -n 4
+#BSUB -R "rusage[mem=8000]"
+#BSUB -R "span[hosts=1]"
+#BSUB -W 8:00
+#BSUB -o rca_paper_%J.out
+#BSUB -e rca_paper_%J.err
+
+# All runs I report in the paper. The script is for an LSF cluster. I used
+# Minerva at Mount Sinai.
+# Submit it from the repository folder:  bsub < jobs/run_paper_minerva.lsf
+# Replace acc_YOUR_ACCOUNT with your own LSF project account.
+#
+#   positive control          simulated data, no patient data, with both
+#                             kinds of models in the doubly robust check
+#   outputs/paper_main        all admissions, the main results
+#   outputs/paper_gbm         all admissions, gradient boosting models in
+#                             the doubly robust check
+#   outputs/paper_first_adm   each patient's first admission only
+#   outputs/paper_no_deaths   without deaths by day 30
+
+cd "$LS_SUBCWD"
+module purge
+module load python/3.10.17
+unset PYTHONPATH
+source .venv/bin/activate
+
+echo "Started at $(date) on $(hostname)"
+echo "===== POSITIVE CONTROL, logistic regression"
+python -u test_dr_simulation.py
+python -u test_dr_simulation.py --coverage 100
+echo "===== POSITIVE CONTROL, gradient boosting"
+RCA_DR_LEARNER=gbm python -u test_dr_simulation.py
+RCA_DR_LEARNER=gbm python -u test_dr_simulation.py --coverage 100
+echo "===== RUN 1: all admissions"
+RCA_OUTPUT_DIR=outputs/paper_main python -u main.py
+echo "===== RUN 2: all admissions, gradient boosting in Stage 3"
+RCA_DR_LEARNER=gbm RCA_OUTPUT_DIR=outputs/paper_gbm python -u main.py
+echo "===== RUN 3: first admissions only"
+RCA_FIRST_ONLY=1 RCA_OUTPUT_DIR=outputs/paper_first_adm python -u main.py
+echo "===== RUN 4: without deaths by day 30"
+RCA_EXCLUDE_DEATHS=1 RCA_OUTPUT_DIR=outputs/paper_no_deaths python -u main.py
+echo "Finished at $(date)"

@@ -1,0 +1,111 @@
+import os
+
+import pandas as pd
+import config
+from src.preprocessing import prepare_data
+from src.lift_rules import prepare_ar_dataframe, run_lift_rules as run_action_rules, extract_treatments
+from src.uplift import fit_uplift, describe_tree
+from src.eda import save_eda
+from src.causal_rules import assemble_causal_rules
+from compute_lift import compute_lift_for_subgroup, _parse_precondition
+from src.dr_validation import compute_dr_scores, summarize_dr, validate_rules, balance_table
+
+os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+
+
+def main():
+    print('1. Preparing data')
+    cases_df, stable_cols, flexible_cols, event_log = prepare_data(config.DATA_DIR)
+
+    print('   EDA summary')
+    save_eda(event_log, config.OUTPUT_DIR)
+
+    print('2. Action rule mining')
+    ar_df = prepare_ar_dataframe(cases_df, stable_cols, flexible_cols)
+    pretty_rules, json_export = run_action_rules(ar_df, stable_cols, flexible_cols)
+    with open(os.path.join(config.OUTPUT_DIR, 'action_rules.txt'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(pretty_rules))
+    print(f'   Rules found: {len(pretty_rules)}')
+
+    print('3. Extracting treatments')
+    treatments = extract_treatments(json_export, flexible_cols) or flexible_cols
+    print(f'   Treatments: {len(treatments)} drugs')
+
+    print('4. Uplift modelling')
+    condition_cols = [c for c in stable_cols if c.startswith('cond__')]
+    uplift_summary, fitted_models, ite_arrays = fit_uplift(cases_df, treatments, condition_cols)
+
+    print('5. Assembling causal rules')
+    causal_rules_df = assemble_causal_rules(json_export, uplift_summary, flexible_cols, cases_df, ite_arrays)
+    print(f'   Causal rules found: {len(causal_rules_df)}')
+    for _, row in causal_rules_df.iterrows():
+        print(' -', row['rule'])
+
+    causal_rules_df[['treatment', 'precondition', 'change', 'subgroup_ite', 'n_candidates', 'rule']].to_csv(
+        os.path.join(config.OUTPUT_DIR, 'causal_rules.csv'), index=False
+    )
+
+    print('6. Saving tree breakdowns for all fitted treatments')
+    tree_rows = []
+    for treatment, (model, feature_names) in fitted_models.items():
+        nodes = describe_tree(model, feature_names)
+        for node in nodes:
+            tree_rows.append({'treatment': treatment, **node})
+
+    if tree_rows:
+        tree_df = pd.DataFrame(tree_rows)
+        tree_df.to_csv(os.path.join(config.OUTPUT_DIR, 'tree_breakdowns.csv'), index=False)
+
+        print(f'   Saved {len(tree_rows)} nodes for {len(fitted_models)} treatment(s)')
+
+    print('7. Computing lift for causal rules')
+    lift_results = []
+    for _, row in causal_rules_df.iterrows():
+        try:
+            stable_dict = _parse_precondition(row['precondition'], stable_cols)
+        except ValueError:
+            continue
+        lift_result = compute_lift_for_subgroup(ar_df, stable_dict, row['treatment'])
+        if lift_result is None:
+            continue
+        lift_results.append({
+            'treatment': row['treatment'],
+            'precondition': row['precondition'],
+            'subgroup_ite_from_causal_rules': row['subgroup_ite'],
+            **lift_result,
+        })
+
+    if lift_results:
+        lift_df = pd.DataFrame(lift_results)
+        lift_df.to_csv(os.path.join(config.OUTPUT_DIR, 'causal_rules_with_lift.csv'), index=False)
+        print(f'   Saved {len(lift_df)} rules with lift to causal_rules_with_lift.csv')
+
+    print(f'8. Doubly robust check (AIPW, {config.DR_LEARNER} models, all covariates, '
+          'intervals clustered by patient)')
+    dr_scores = compute_dr_scores(cases_df, flexible_cols, condition_cols)
+    dr_df = summarize_dr(cases_df, dr_scores)
+    dr_df.to_csv(os.path.join(config.OUTPUT_DIR, 'dr_effects.csv'), index=False)
+    if not dr_df.empty:
+        print(dr_df[['treatment', 'subgroup', 'n_admissions', 'n_treated',
+                     'unadjusted_diff', 'aipw_effect', 'aipw_ci_low', 'aipw_ci_high']]
+              .to_string(index=False))
+
+    bal_df = balance_table(cases_df, dr_scores, condition_cols)
+    bal_df.to_csv(os.path.join(config.OUTPUT_DIR, 'balance.csv'), index=False)
+    if not bal_df.empty:
+        print('   Covariate balance, largest absolute SMD before and after weighting:')
+        worst = (bal_df.assign(raw=bal_df['smd_raw'].abs(), weighted=bal_df['smd_weighted'].abs())
+                 .groupby(['treatment', 'subgroup'], sort=False)[['raw', 'weighted']].max())
+        print(worst.to_string())
+
+    print('9. Doubly robust validation of every causal rule (Holm-corrected)')
+    rv_df = validate_rules(causal_rules_df, cases_df, dr_scores, stable_cols, _parse_precondition)
+    rv_df.to_csv(os.path.join(config.OUTPUT_DIR, 'rule_validation.csv'), index=False)
+    if not rv_df.empty:
+        print(rv_df.groupby(['treatment', 'verdict']).size().to_string())
+
+    print(f'\nDone. Outputs saved to {config.OUTPUT_DIR}/')
+
+
+if __name__ == '__main__':
+    main()
