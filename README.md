@@ -1,8 +1,8 @@
-# Causal Validation of Action Rules for Root Cause Analysis in Psychiatric Care
+# Beyond Associations: Root Cause Analysis of Readmissions in Psychiatric Care Processes
 
-This is the code for our case study *Causal Validation of Action Rules for
-Root Cause Analysis in Psychiatric Care Processes* (Z. Soleimani and
-M. Weske), submitted to the PODS4H workshop.
+This is the code for our case study *Beyond Associations: Root Cause Analysis
+of Readmissions in Psychiatric Care Processes* (Z. Soleimani, A. Aslanli, and
+M. Weske), submitted to the PODS4H 2027 workshop.
 
 The pipeline looks for antidepressant treatments in the hospital that lower
 the risk of a readmission within 30 days after an inpatient depression stay.
@@ -12,10 +12,16 @@ stage:
 1. **Action rules** propose candidate treatments for patient subgroups.
 2. **Uplift trees** (CausalML) estimate the effect of each treatment. The
    leaf effects come from the half of the data that did not choose the
-   splits. This is the `honesty` option of CausalML.
+   splits. The `honesty` option of CausalML splits the data this way, but
+   the score it stores in each leaf still comes from the other half. So
+   `src/uplift.py` computes each leaf effect from the refilled counts.
 3. **A doubly robust check** (AIPW with cross-fitting) tests every rule in
    its own subgroup and adjusts for all covariates at once. The p-values are
    corrected with Holm's method.
+
+Stages 2 and 3 also use severity markers that come from the event data:
+arrival through the emergency department, the number of earlier admissions,
+and suicidality diagnoses.
 
 A positive control on simulated data with confounding shows that Stage 3
 finds known effects.
